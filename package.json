@@ -1,0 +1,22 @@
+{
+  "name": "company-os-core",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Company OS Core Platform — Multi-Tenant SaaS Microkernel ERP with Google Drive Auto-Folder & Two-Way Sheets Sync",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "plugins/*"
+  ],
+  "scripts": {
+    "dev:api": "npm --workspace=apps/api run start:dev",
+    "dev:web": "npm --workspace=apps/web run dev",
+    "build:sdk": "npm --workspace=packages/plugin-sdk run build",
+    "build:api": "npm --workspace=apps/api run build",
+    "build:web": "npm --workspace=apps/web run build",
+    "build": "npm run build:sdk && npm run build:api && npm run build:web",
+    "prisma:generate": "npm --workspace=apps/api run prisma:generate",
+    "prisma:migrate": "npm --workspace=apps/api run prisma:migrate",
+    "prisma:seed": "npm --workspace=apps/api run prisma:seed"
+  }
+}

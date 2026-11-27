@@ -1,0 +1,64 @@
+{
+  "module": "crm",
+  "name": "CRM & Admissions Plugin",
+  "version": "1.0.0",
+  "contract": "core-v1",
+  "provides_entities": ["lead", "followup", "payment_collection"],
+  "needs_apis": [
+    "core.employees.read",
+    "core.students.create",
+    "core.products.read",
+    "core.sheets.write",
+    "core.events.publish"
+  ],
+  "events_publish": [
+    "lead.created",
+    "lead.stage_changed",
+    "admission.completed",
+    "payment.received",
+    "call.logged"
+  ],
+  "events_subscribe": [
+    "student.created",
+    "employee.updated",
+    "product.updated"
+  ],
+  "permissions": [
+    "crm.lead.view_own",
+    "crm.lead.view_team",
+    "crm.lead.create",
+    "crm.lead.transfer",
+    "crm.config.pipeline"
+  ],
+  "workspaces": [
+    {
+      "key": "crm_admin",
+      "label": "CRM Admin",
+      "menus": ["dashboard", "payments", "leads", "config"]
+    },
+    {
+      "key": "crm_exec",
+      "label": "CRM Executive",
+      "menus": ["dashboard", "leads", "calls", "reports"]
+    }
+  ],
+  "kpi_sources": ["call.logged", "followup.done", "lead.created", "admission.completed"],
+  "task_sources": ["followup.created"],
+  "sheets": [
+    {
+      "spreadsheet": "CRM Data",
+      "sheets": [
+        {
+          "name": "Leads",
+          "headers": ["lead_id", "person_name", "phone", "product_code", "stage", "owner_emp_id", "notes", "updated_at"],
+          "editableColumns": ["notes", "stage"]
+        },
+        {
+          "name": "Followups",
+          "headers": ["followup_id", "lead_id", "due_at", "status", "assigned_to", "notes"],
+          "editableColumns": ["status", "notes"]
+        }
+      ]
+    }
+  ]
+}

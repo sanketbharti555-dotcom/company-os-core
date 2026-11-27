@@ -1,0 +1,805 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// 1. SAAS IDENTITY & MULTI-TENANT ORGANIZATIONS
+// ============================================================================
+
+model User {
+  id                     String   @id @default(uuid())
+  email                  String   @unique
+  fullName               String
+  phone                  String?
+  passwordHash           String?
+  googleId               String?  @unique
+  avatarUrl              String?
+  // Encrypted Google OAuth tokens captured at Google Sign-In so Drive auto-connects during Org Setup
+  googleAccessTokenEnc   String?
+  googleRefreshTokenEnc  String?
+  googleTokenExpiry      DateTime?
+  isActive               Boolean  @default(true)
+  isPlatformAdmin        Boolean  @default(false)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  memberships            OrganizationMembership[]
+  refreshTokens          RefreshToken[]
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+}
+
+model Tenant {
+  id            String   @id @default(uuid())
+  code          String   @unique // e.g. TEN-0001
+  name          String
+  legalName     String?
+  slug          String   @unique // e.g. the-prime-classes
+  plan          String   @default("STARTER") // STARTER | GROWTH | ENTERPRISE
+  status        String   @default("ACTIVE")  // ACTIVE | SUSPENDED
+  setupStatus   String   @default("PENDING") // PENDING | COMPLETED (Org Setup Gate)
+  logoUrl       String?
+  gstin         String?
+  phone         String?
+  email         String?
+  address       String?
+  website       String?
+  settingsJson  Json     @default("{}") // regional, timezone, currency, numbering, working hours
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  memberships      OrganizationMembership[]
+  sessions         Session[]
+  departments      Department[]
+  employees        Employee[]
+  roles            Role[]
+  clusters         PermissionCluster[]
+  delegations      Delegation[]
+  workspaces       Workspace[]
+  students         Student[]
+  productCategories ProductCategory[]
+  products         Product[]
+  forms            Form[]
+  dataTypes        DataType[]
+  kras             Kra[]
+  kpis             Kpi[]
+  tasks            Task[]
+  bodSnapshots     BodSnapshot[]
+  eodSubmissions   EodSubmission[]
+  dailyScores      DailyScore[]
+  notices          Notice[]
+  approvalPolicies ApprovalPolicy[]
+  approvalRequests ApprovalRequest[]
+  plugins          TenantPlugin[]
+  moduleTokens     ModuleToken[]
+  sheetConnection  SheetConnection?
+  subscription     TenantSubscription?
+  moduleOverrides  TenantModuleOverride[]
+  sheetMappings    SheetMapping[]
+  syncErrors       SyncError[]
+  auditLogs        AuditLog[]
+  outboxEvents     EventOutbox[]
+  inboxEvents      EventInbox[]
+}
+
+model OrganizationMembership {
+  id         String   @id @default(uuid())
+  userId     String
+  tenantId   String
+  employeeId String?
+  isOwner    Boolean  @default(false)
+  status     String   @default("ACTIVE") // ACTIVE | INVITED | REVOKED
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employee   Employee? @relation(fields: [employeeId], references: [id])
+
+  @@unique([userId, tenantId])
+  @@index([tenantId])
+}
+
+// ============================================================================
+// 2. SESSION ENGINE (ARCHIVE & CLONE)
+// ============================================================================
+
+model Session {
+  id        String   @id @default(uuid())
+  tenantId  String
+  code      String   // e.g. 2026-27
+  name      String   // e.g. Academic Session 2026-27
+  startDate DateTime
+  endDate   DateTime
+  status    String   @default("ACTIVE") // ACTIVE | ARCHIVED
+  isCurrent Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+}
+
+// ============================================================================
+// 3. EMPLOYEE MASTER & DEPARTMENTS (SINGLE SOURCE FOR ALL MODULES)
+// ============================================================================
+
+model Department {
+  id             String   @id @default(uuid())
+  tenantId       String
+  name           String
+  code           String
+  headEmployeeId String?
+  parentId       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  tenant         Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employees      Employee[]
+  kras           Kra[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+}
+
+model Employee {
+  id             String   @id @default(uuid())
+  tenantId       String
+  code           String   // Auto-generated EMP-0001
+  fullName       String
+  email          String
+  phone          String   // E.164 format (+91XXXXXXXXXX)
+  departmentId   String?
+  designation    String?
+  managerId      String?
+  employmentType String   @default("FULL_TIME") // FULL_TIME | PART_TIME | VISITING | INTERN
+  status         String   @default("ACTIVE")    // ACTIVE | NOTICE | INACTIVE
+  roleTags       String[] @default([])          // ["SuperAdmin", "Teacher", "Sales", "Accountant"]
+  joiningDate    DateTime @default(now())
+  photoUrl       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  tenant         Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  department     Department? @relation(fields: [departmentId], references: [id])
+  memberships    OrganizationMembership[]
+  userRoles      UserRole[]
+  userWorkspaces UserWorkspace[]
+  tasks          Task[]
+
+  @@unique([tenantId, code])
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+// ============================================================================
+// 4. HIERARCHICAL RBAC, CLUSTERS, ATTORNEY DELEGATION & WORKSPACES (SKINS)
+// ============================================================================
+
+model Permission {
+  id          String   @id @default(uuid())
+  key         String   @unique // e.g. core.employees.manage, crm.lead.view
+  resource    String
+  action      String
+  description String?
+}
+
+model PermissionCluster {
+  id             String   @id @default(uuid())
+  tenantId       String
+  name           String
+  permissionKeys String[] @default([])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId])
+}
+
+model Role {
+  id             String   @id @default(uuid())
+  tenantId       String
+  name           String
+  description    String?
+  permissionKeys String[] @default([])
+  clusterIds     String[] @default([])
+  workspaceKeys  String[] @default([])
+  isSystem       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant         Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userRoles      UserRole[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model UserRole {
+  id         String    @id @default(uuid())
+  tenantId   String
+  employeeId String
+  roleId     String
+  scope      String    @default("OWN") // OWN | TEAM | DEPARTMENT | ALL
+  maxAmount  BigInt?   // Optional financial approval ceiling in paise
+  validTill  DateTime?
+  createdAt  DateTime  @default(now())
+
+  employee   Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  role       Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, roleId])
+  @@index([tenantId])
+}
+
+model Delegation {
+  id            String    @id @default(uuid())
+  tenantId      String
+  giverEmpId    String
+  receiverEmpId String
+  permissionKey String
+  scope         String    // Must be <= giver's scope (OWN < TEAM < DEPARTMENT < ALL)
+  maxAmount     BigInt?   // Must be <= giver's maxAmount
+  validTill     DateTime?
+  parentGrantId String?   // Supports cascade revoke
+  isRevoked     Boolean   @default(false)
+  revokedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId, receiverEmpId])
+  @@index([tenantId, giverEmpId])
+}
+
+model Workspace {
+  id          String   @id @default(uuid())
+  tenantId    String
+  key         String   // e.g. core_admin, personal_space, crm_exec, teacher_app
+  name        String
+  moduleKey   String   @default("core")
+  menusJson   Json     @default("[]")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignments UserWorkspace[]
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+model UserWorkspace {
+  id          String   @id @default(uuid())
+  tenantId    String
+  employeeId  String
+  workspaceId String
+  createdAt   DateTime @default(now())
+
+  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, workspaceId])
+  @@index([tenantId])
+}
+
+// ============================================================================
+// 5. CORE STUDENT REGISTRY & PRODUCT / PROGRAM MASTER
+// ============================================================================
+
+model ProductCategory {
+  id        String    @id @default(uuid())
+  tenantId  String
+  name      String
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products  Product[]
+
+  @@index([tenantId])
+}
+
+model Product {
+  id            String   @id @default(uuid())
+  tenantId      String
+  sessionId     String?
+  categoryId    String?
+  code          String   // PRD-0001
+  name          String
+  mode          String   @default("OFFLINE") // OFFLINE | ONLINE | HYBRID
+  pricePaise    BigInt   @default(0)         // Money stored strictly in integer paise
+  feePlansJson  Json     @default("[]")
+  description   String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category      ProductCategory? @relation(fields: [categoryId], references: [id])
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+}
+
+model Student {
+  id            String   @id @default(uuid())
+  tenantId      String
+  sessionId     String?
+  code          String   // STU-2026-000001 (synchronously generated)
+  fullName      String
+  phone         String   // E.164
+  email         String?
+  dob           DateTime?
+  leadId        String?  // Origin lead from CRM plugin
+  productId     String?
+  guardianName  String?
+  guardianPhone String?
+  status        String   @default("ADMITTED") // ADMITTED | ENROLLED | ALUMNI | INACTIVE
+  consentJson   Json     @default("{}")       // DPDP Act 2023 consent record
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, code])
+  @@index([tenantId, phone])
+}
+
+// ============================================================================
+// 6. NO-CODE BUILDER LAYER (FORMS & CUSTOM DATA TYPES)
+// ============================================================================
+
+model Form {
+  id          String   @id @default(uuid())
+  tenantId    String
+  title       String
+  formType    String   @default("CUSTOM") // INQUIRY | ADMISSION | FEEDBACK | CUSTOM
+  productId   String?
+  fieldsJson  Json     @default("[]")
+  actionType  String?  // CREATE_LEAD | CREATE_STUDENT | SAVE_RECORD
+  isPublished Boolean  @default(false)
+  publicSlug  String   @unique
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  submissions FormSubmission[]
+  @@index([tenantId])
+}
+
+model FormSubmission {
+  id        String   @id @default(uuid())
+  tenantId  String
+  formId    String
+  dataJson  Json
+  createdAt DateTime @default(now())
+
+  form      Form     @relation(fields: [formId], references: [id], onDelete: Cascade)
+  @@index([tenantId, formId])
+}
+
+model DataType {
+  id         String   @id @default(uuid())
+  tenantId   String
+  key        String
+  name       String
+  fieldsJson Json     @default("[]")
+  isArchived Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  records    DataRecord[]
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+model DataRecord {
+  id         String   @id @default(uuid())
+  tenantId   String
+  dataTypeId String
+  dataJson   Json
+  createdBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  deletedAt  DateTime?
+
+  dataType   DataType @relation(fields: [dataTypeId], references: [id], onDelete: Cascade)
+  @@index([tenantId, dataTypeId])
+}
+
+// ============================================================================
+// 7. SINGLE TASK ENGINE, KRA/KPI ENGINE & DAILY OPERATION HUB (BOD/EOD/SCORE)
+// ============================================================================
+
+model Kra {
+  id           String   @id @default(uuid())
+  tenantId     String
+  departmentId String?
+  roleTag      String?
+  name         String
+  frequency    String   @default("DAILY") // DAILY | WEEKLY | MONTHLY | QUARTERLY | YEARLY
+  sopTitle     String?
+  sopContent   String?
+  sopVersion   Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+
+  tenant       Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  department   Department? @relation(fields: [departmentId], references: [id])
+  kpis         Kpi[]
+
+  @@index([tenantId])
+}
+
+model Kpi {
+  id          String   @id @default(uuid())
+  tenantId    String
+  kraId       String
+  name        String
+  formulaJson Json     @default("{}") // Stored in DB, never hard-coded
+  targetValue Float    @default(1)
+  unit        String   @default("NUMBER") // NUMBER | PERCENT | YES_NO | AMOUNT
+  source      String   @default("EVENT")  // EVENT | LINKED_DB | MANUAL | MIXED
+  sourceEvent String?  // e.g. admission.completed, call.logged
+  frequency   String   @default("DAILY")
+  weight      Float    @default(100)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kra         Kra      @relation(fields: [kraId], references: [id], onDelete: Cascade)
+  @@index([tenantId])
+}
+
+model Task {
+  id           String    @id @default(uuid())
+  tenantId     String
+  title        String
+  inputType    String    @default("NUMBER") // NUMBER | YES_NO | CATEGORY | DYNAMIC_LIST
+  kraId        String?
+  kpiId        String?
+  targetValue  Float     @default(1)
+  actualValue  Float     @default(0)
+  unit         String    @default("NUMBER")
+  weight       Float     @default(100)
+  source       String    @default("KPI") // KPI | SYSTEM | MANUAL
+  sourceModule String?   // crm | academic | finance | core
+  sourceId     String?   // syllabus_id, followup_id, etc. for 2-way sync
+  assignedToId String
+  dueDate      DateTime
+  status       String    @default("PENDING") // PENDING | IN_PROGRESS | DONE | MISSED
+  scoreAuto    Float     @default(0)
+  scoreFinal   Float?
+  scoreReason  String?
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedTo   Employee  @relation(fields: [assignedToId], references: [id])
+
+  @@index([tenantId, assignedToId, dueDate])
+}
+
+model BodSnapshot {
+  id         String   @id @default(uuid())
+  tenantId   String
+  employeeId String
+  date       String   // YYYY-MM-DD
+  tasksJson  Json
+  createdAt  DateTime @default(now())
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@unique([tenantId, employeeId, date])
+}
+
+model EodSubmission {
+  id          String   @id @default(uuid())
+  tenantId    String
+  employeeId  String
+  date        String   // YYYY-MM-DD
+  actualsJson Json
+  notes       String?
+  status      String   @default("SUBMITTED") // SUBMITTED | VERIFIED | REOPENED
+  submittedAt DateTime @default(now())
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@unique([tenantId, employeeId, date])
+}
+
+model DailyScore {
+  id          String   @id @default(uuid())
+  tenantId    String
+  employeeId  String
+  date        String   // YYYY-MM-DD
+  autoScore   Float
+  finalScore  Float    // 0 to 200%
+  reason      String?
+  scoredByEmp String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@unique([tenantId, employeeId, date])
+}
+
+// ============================================================================
+// 8. SHARED APPROVAL ENGINE & NOTICES
+// ============================================================================
+
+model ApprovalPolicy {
+  id             String   @id @default(uuid())
+  tenantId       String
+  entityType     String   // EXPENSE | DISCOUNT | LEAVE | PROFILE_CHANGE | EOD_REOPEN
+  name           String
+  conditionsJson Json     @default("{}") // e.g. amount slabs
+  stepsJson      Json     @default("[]")
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId])
+}
+
+model ApprovalRequest {
+  id             String   @id @default(uuid())
+  tenantId       String
+  entityType     String
+  entityId       String
+  requestedByEmp String
+  amountPaise    BigInt?
+  status         String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  reason         String?
+  decidedByEmp   String?
+  decidedAt      DateTime?
+  createdAt      DateTime @default(now())
+
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId, status])
+}
+
+model Notice {
+  id          String   @id @default(uuid())
+  tenantId    String
+  title       String
+  body        String
+  targetScope String   @default("ALL") // ALL | DEPARTMENT | ROLE
+  targetValue String?
+  createdBy   String
+  createdAt   DateTime @default(now())
+  deletedAt   DateTime?
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId])
+}
+
+// ============================================================================
+// 9. PLUGIN DOCKING STATION, SCOPED MODULE TOKENS, EVENT BUS & AUDIT
+// ============================================================================
+
+model TenantPlugin {
+  id           String   @id @default(uuid())
+  tenantId     String
+  moduleKey    String   // crm | academic | finance | hrms | inventory | growth | lms
+  name         String
+  version      String
+  status       String   @default("INSTALLED") // INSTALLED | ENABLED | DISABLED
+  manifestJson Json
+  installedAt  DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@unique([tenantId, moduleKey])
+  @@index([tenantId])
+}
+
+model ModuleToken {
+  id           String    @id @default(uuid())
+  tenantId     String
+  moduleKey    String
+  label        String
+  tokenPrefix  String    // First 12 chars for display
+  tokenHash    String    @unique // SHA-256 hash; raw token shown only once
+  scopes       String[]  @default([])
+  createdByEmp String
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId, moduleKey])
+}
+
+model EventOutbox {
+  id              String    @id @default(uuid())
+  tenantId        String
+  eventName       String
+  version         Int       @default(1)
+  actorEmployeeId String
+  sourceModule    String
+  correlationId   String
+  payloadJson     Json
+  status          String    @default("PENDING") // PENDING | PUBLISHED | DEAD_LETTER
+  retryCount      Int       @default(0)
+  occurredAt      DateTime  @default(now())
+  publishedAt     DateTime?
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId, status])
+}
+
+model EventInbox {
+  id          String   @id @default(uuid())
+  tenantId    String
+  eventId     String
+  consumerKey String
+  processedAt DateTime @default(now())
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@unique([eventId, consumerKey])
+  @@index([tenantId])
+}
+
+model AuditLog {
+  id              String   @id @default(uuid())
+  tenantId        String
+  actorEmployeeId String
+  action          String
+  resource        String
+  resourceId      String?
+  oldValueJson    Json?
+  newValueJson    Json?
+  ipAddress       String?
+  correlationId   String?
+  createdAt       DateTime @default(now())
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId, createdAt])
+}
+
+// ============================================================================
+// 10. GOOGLE DRIVE AUTO-FOLDER & TWO-WAY GOOGLE SHEETS SYNC
+// ============================================================================
+
+model SheetConnection {
+  id                String    @id @default(uuid())
+  tenantId          String    @unique
+  googleEmail       String
+  accessTokenEnc    String
+  refreshTokenEnc   String
+  tokenExpiry       DateTime?
+  driveFolderId     String?
+  driveFolderName   String?
+  driveFolderUrl    String?
+  status            String    @default("CONNECTED") // CONNECTED | PAUSED | DISCONNECTED | ERROR
+  twoWayEnabled     Boolean   @default(true)
+  maskStudentPii    Boolean   @default(false)
+  lastSyncedAt      DateTime?
+  lastError         String?
+  webhookChannelId  String?
+  webhookExpiry     DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model SheetMapping {
+  id              String   @id @default(uuid())
+  tenantId        String
+  moduleKey       String   // core | crm | academic | finance ...
+  sessionCode     String   // 2026-27
+  tableName       String   // employees | departments | products | students | notices
+  spreadsheetId   String
+  spreadsheetName String
+  spreadsheetUrl  String
+  tabName         String
+  headersJson     Json     // ["code", "fullName", ...]
+  editableCols    String[] @default([]) // Whitelisted columns for Two-Way Sheet -> DB sync
+  rowHashesJson   Json     @default("{}") // { recordId: sha256 } for diffing
+  lastSyncedAt    DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@unique([tenantId, moduleKey, sessionCode, tabName])
+  @@index([tenantId])
+}
+
+model SyncError {
+  id              String   @id @default(uuid())
+  tenantId        String
+  spreadsheetName String
+  tabName         String
+  rowNumber       Int
+  recordKey       String?
+  editorEmail     String?
+  reason          String
+  reverted        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId, createdAt])
+}
+
+// ============================================================================
+// 11. SAAS PLATFORM CONTROL PLANE (BETA / TESTING / SUBSCRIPTIONS)
+// ============================================================================
+
+model GlobalModuleCatalog {
+  id                 String   @id @default(uuid())
+  moduleKey          String   @unique // crm | academic | finance | hrms | inventory | growth | lms
+  name               String
+  description        String
+  version            String   @default("1.0.0")
+  releaseStage       String   @default("INTERNAL_TESTING") // INTERNAL_TESTING | BETA | PUBLIC
+  requiredPlan       String   @default("GROWTH")           // STARTER | GROWTH | ENTERPRISE
+  addonPricePaise    BigInt   @default(0)                  // Monthly INR in paise (e.g. 99900 = Rs 999)
+  manifestJson       Json
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model TenantSubscription {
+  id                     String    @id @default(uuid())
+  tenantId               String    @unique
+  plan                   String    @default("STARTER") // STARTER | GROWTH | ENTERPRISE
+  status                 String    @default("TRIALING") // TRIALING | ACTIVE | PAST_DUE | CANCELLED
+  trialEndsAt            DateTime?
+  currentPeriodEnd       DateTime?
+  provider               String    @default("MANUAL")  // MANUAL | RAZORPAY | CASHFREE
+  externalCustomerId     String?
+  externalSubscriptionId String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model TenantModuleOverride {
+  id             String    @id @default(uuid())
+  tenantId       String
+  moduleKey      String
+  accessType     String    // TESTING_FREE | BETA_FREE | PAID_ADDON | BLOCKED
+  expiresAt      DateTime? // Optional expiry for time-bound Beta / Testing
+  note           String?
+  grantedByEmail String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, moduleKey])
+  @@index([tenantId])
+}

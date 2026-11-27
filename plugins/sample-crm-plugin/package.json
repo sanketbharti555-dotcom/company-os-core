@@ -1,0 +1,11 @@
+{
+  "name": "@company-os/sample-crm-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "demo": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@company-os/plugin-sdk": "1.0.0"
+  }
+}
